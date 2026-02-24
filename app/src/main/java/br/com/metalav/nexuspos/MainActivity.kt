@@ -958,10 +958,19 @@ private fun ChoosePaymentScreen(
                     val resp = apiInstance.getPosStatusByIdentificadorLocal(posSerial, ident)
                     val u = resp.ui_state?.uppercase() ?: ""
                     val pStatus = resp.pagamento?.status?.uppercase() ?: ""
+                    val avail = resp.availability?.uppercase() ?: ""
                     if (u != lastSeenUi || pStatus != lastSeenPagamentoStatus) {
-                        android.util.Log.d("NEXUS_POLL_SHORT", "ident=$ident ui_state=$lastSeenUi→$u pagamento.status=$lastSeenPagamentoStatus→$pStatus")
+                        android.util.Log.d("NEXUS_POLL_SHORT", "ident=$ident ui_state=$lastSeenUi→$u pagamento.status=$lastSeenPagamentoStatus→$pStatus availability=$avail")
                         lastSeenUi = u
                         lastSeenPagamentoStatus = pStatus
+                    }
+                    if (u == "LIVRE" || avail == "LIVRE") {
+                        android.util.Log.d("NEXUS_STATUS", "LIVRE detected BEFORE reset postAuthorizePid=$postAuthorizePid postAuthorizePhase=$postAuthorizePhase ident=$ident ui_state=$u availability=$avail ciclo.id=${resp.ciclo?.id ?: "-"} pagamento.id=${resp.pagamento?.id ?: "null"}")
+                        postAuthorizePid = null
+                        postAuthorizePhase = "none"
+                        android.util.Log.d("NEXUS_STATUS", "LIVRE AFTER reset postAuthorizePid=null postAuthorizePhase=none navigating to status")
+                        onAuthorized(pid)
+                        return@withTimeoutOrNull
                     }
                     val paymentConfirmed = (resp.pagamento?.status?.uppercase() == "PAGO") ||
                         (u in setOf("AGUARDANDO_LIBERACAO", "LIBERADO", "EM_USO"))
@@ -1280,21 +1289,25 @@ private fun KioskStatusScreen(
             while (isActive) {
                 try {
                     val resp = api.getPosStatusByIdentificadorLocal(posSerial, identificadorLocal)
-                    val u = resp.ui_state ?: ""
-                    val a = resp.availability ?: ""
-                    if (u != lastUiState || a != lastAvailability) {
-                        Log.d("NEXUS_STATUS", "STATE_CHANGE: ui_state $lastUiState→$u availability $lastAvailability→$a")
-                        lastUiState = u
+                    val uState = resp.ui_state?.uppercase() ?: ""
+                    val a = resp.availability?.uppercase() ?: ""
+                    val cicloId = resp.ciclo?.id ?: "-"
+                    val cicloStatus = resp.ciclo?.status?.uppercase() ?: "-"
+                    val pagId = resp.pagamento?.id ?: "null"
+                    val pagStatus = resp.pagamento?.status?.uppercase() ?: "-"
+                    Log.d("NEXUS_STATUS", "PARSED ident=$identificadorLocal ui_state=$uState availability=$a ciclo.id=$cicloId ciclo.status=$cicloStatus pagamento.id=$pagId pagamento.status=$pagStatus")
+                    if (uState != lastUiState || a != lastAvailability) {
+                        Log.d("NEXUS_STATUS", "STATE_CHANGE: ui_state $lastUiState→$uState availability $lastAvailability→$a")
+                        lastUiState = uState
                         lastAvailability = a
                     }
                     status = resp
-                    val liberado = (resp.ui_state?.uppercase() == "LIVRE") ||
-                        (resp.availability?.uppercase() == "LIVRE") || run {
-                        val iotStatus = resp.iot_command?.status?.uppercase() ?: ""
-                        val cicloStatus = resp.ciclo?.status?.uppercase() ?: ""
-                        iotStatus == "EXECUTADO" || cicloStatus in setOf("FINALIZADO", "EM_USO", "LIBERADO")
+                    val terminalStates = setOf("LIVRE", "FINALIZADO", "ESTORNADO", "EXPIRADO", "ERRO")
+                    val isLivre = uState == "LIVRE" || a == "LIVRE"
+                    if (uState in terminalStates || isLivre) {
+                        Log.d("NEXUS_STATUS", "terminal or LIVRE ui_state=$uState availability=$a breaking poll")
+                        break
                     }
-                    if (liberado) break
                 } catch (e: Throwable) {
                     Log.e("NEXUS_STATUS", "req ident=$identForLog error=${e.message}", e)
                 }
@@ -1308,13 +1321,9 @@ private fun KioskStatusScreen(
         }
     }
 
-    val liberado = status?.let { s ->
-        (s.ui_state?.uppercase() == "LIVRE") || (s.availability?.uppercase() == "LIVRE") || run {
-            val iotStatus = s.iot_command?.status?.uppercase() ?: ""
-            val cicloStatus = s.ciclo?.status?.uppercase() ?: ""
-            iotStatus == "EXECUTADO" || cicloStatus in setOf("FINALIZADO", "EM_USO", "LIBERADO")
-        }
-    } ?: false
+    val uiState = status?.ui_state?.uppercase() ?: ""
+    val availability = status?.availability?.uppercase() ?: ""
+    val showIdle = uiState == "LIVRE" || availability == "LIVRE"
 
     Column(
         modifier = Modifier
@@ -1330,24 +1339,59 @@ private fun KioskStatusScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (liberado) {
-                Text(
-                    "Máquina liberada",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            } else {
-                CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    "Aguardando liberação…",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            when (uiState) {
+                "AGUARDANDO_PAGAMENTO" -> {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    Text("Processando pagamento…", style = MaterialTheme.typography.bodyMedium)
+                }
+                "PAGO" -> Text("Pagamento aprovado", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                "LIBERANDO" -> {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    Text("Liberando máquina…", style = MaterialTheme.typography.bodyMedium)
+                }
+                "EM_USO" -> Text("Máquina em uso", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                "FINALIZADO" -> {
+                    Text("Máquina pronta", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text("Pressione INICIAR na máquina para começar.", style = MaterialTheme.typography.bodyMedium)
+                }
+                "EXPIRADO" -> {
+                    Text("Pagamento expirado", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onBack) { Text("Voltar") }
+                }
+                "ERRO" -> {
+                    Text("Algo deu errado", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onBack) { Text("Voltar") }
+                }
+                "ESTORNANDO" -> {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    Text("Não conseguimos iniciar a máquina", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text("Estorno automático em andamento…", style = MaterialTheme.typography.bodyMedium)
+                }
+                "ESTORNADO" -> {
+                    Text("Estorno confirmado", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Button(onClick = onBack) { Text("Voltar") }
+                }
+                "LIVRE" -> {
+                    Text("Toque para iniciar", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                    Text("Selecione a máquina e escolha a forma de pagamento.", style = MaterialTheme.typography.bodyMedium)
+                }
+                else -> {
+                    if (showIdle) {
+                        Text("Toque para iniciar", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                        Text("Selecione a máquina e escolha a forma de pagamento.", style = MaterialTheme.typography.bodyMedium)
+                    } else if (isLoading && status == null) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        Text("Carregando…", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        Text("Aguardando liberação…", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
             }
         }
-        status?.let { s ->
+        if (BuildConfig.DEBUG && status != null) {
             Text(
-                "dbg: ui_state=${s.ui_state ?: "-"} availability=${s.availability ?: "-"}",
+                "dbg: ui_state=${status?.ui_state ?: "-"} availability=${status?.availability ?: "-"}",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
