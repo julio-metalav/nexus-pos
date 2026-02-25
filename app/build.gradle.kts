@@ -17,8 +17,8 @@ android {
         applicationId = "br.com.nexuspayments.pos"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0-telas"
 
         // Defaults (ainda vamos mover isso depois para DataStore/Config screen)
         buildConfigField("String", "BASE_URL", "\"https://ci.metalav.com.br\"")

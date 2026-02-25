@@ -1,0 +1,21 @@
+VERIFICAÇÃO — Código no disco (MainActivity.kt)
+==============================================
+O arquivo app\src\main\java\br\com\metalav\nexuspos\MainActivity.kt contém:
+- selectedPriceCentavos, initialPriceCentavos (linhas ~346-362)
+- "← Voltar" na tela Escolha máquina (linha ~804)
+- Cards 224.dp, displayLarge para SECAR/LAVAR, preços da API
+- Botões PIX/Crédito/Débito 134.dp, 43.dp de espaço
+
+Se o app no celular NÃO mostra isso, o APK instalado não é o que foi compilado aqui.
+
+COMO INSTALAR O APK NOVO NO CELULAR
+====================================
+1. No celular: Configurações → Apps → NexusPos (ou "POS") → Desinstalar.
+2. Conecte o celular por USB. Ative "Depuração USB".
+3. No PowerShell (nesta pasta):
+   .\gradlew.bat installDebug
+4. Abra o app no celular.
+5. Na tela inicial, segure 10 segundos na logo para abrir Config.
+   O título deve ser: "Config POS · 2.0-telas"
+
+Se aparecer só "Config POS" (sem 2.0-telas), o app antigo ainda está instalado — repita o passo 1 e instale de novo.

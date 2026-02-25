@@ -29,6 +29,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import br.com.metalav.nexuspos.ui.PosStatusScreen
 import br.com.metalav.nexuspos.ui.theme.NexusPosTheme
+import br.com.metalav.nexuspos.ui.theme.MetaLavOrange
 import br.com.metalav.nexuspos.NexusApi
 import br.com.metalav.nexuspos.PosStatusResponse
 import kotlinx.coroutines.Job
@@ -293,6 +294,7 @@ fun PosV0FixedMachineScreen(
     var machines by remember { mutableStateOf<List<PosMachine>?>(null) }
     var machinesError by remember { mutableStateOf<String?>(null) }
     var selectedMachine by remember { mutableStateOf<PosMachine?>(null) }
+    var selectedPriceCentavos by remember { mutableStateOf<Int?>(null) }
     var selectedPaymentMethod by remember { mutableStateOf<String?>(null) }
     var showTimeoutAviso by remember { mutableStateOf(false) }
     val api = remember(cfg?.baseUrl) { cfg?.baseUrl?.let { NexusApi(it) } }
@@ -339,8 +341,11 @@ fun PosV0FixedMachineScreen(
             Screen.CHOOSE_MACHINE -> ChooseMachineScreen(
                 machines = machines,
                 machinesError = machinesError,
-                onSelect = { machine ->
+                cfg = cfg,
+                api = api,
+                onSelect = { machine, priceCentavos ->
                     selectedMachine = machine
+                    selectedPriceCentavos = priceCentavos
                     currentScreen = Screen.CHOOSE_PAYMENT
                 },
                 onBack = { currentScreen = Screen.START; machines = null; machinesError = null }
@@ -348,13 +353,14 @@ fun PosV0FixedMachineScreen(
             Screen.CHOOSE_PAYMENT -> ChoosePaymentScreen(
                 cfg = cfg,
                 selectedMachine = selectedMachine,
+                initialPriceCentavos = selectedPriceCentavos,
                 authorize = authorize,
                 scope = scope,
                 onAuthorized = { id ->
                     lastPagamentoId = id
                     currentScreen = Screen.STATUS
                 },
-                onBack = { currentScreen = Screen.CHOOSE_MACHINE; selectedMachine = null }
+                onBack = { currentScreen = Screen.CHOOSE_MACHINE; selectedMachine = null; selectedPriceCentavos = null }
             )
             Screen.STATUS -> {
                 val pid = lastPagamentoId
@@ -689,20 +695,29 @@ private fun StartScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface)
     ) {
-        // Área principal: CTA "Toque para iniciar" (fluxo normal)
+        // Área principal: CTA "Toque para iniciar" (fluxo normal) — botão laranja como na referência
         Column(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth()
-                .clickable(onClick = onStart),
+                .fillMaxWidth(),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                "Toque para iniciar",
-                style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.Bold
-            )
+            Button(
+                onClick = onStart,
+                modifier = Modifier
+                    .heightIn(min = 83.dp)
+                    .widthIn(min = 322.dp)
+                    .padding(horizontal = 32.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = MetaLavOrange),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    "Toque para iniciar",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
             if (timeoutAviso) {
                 LaunchedEffect(Unit) {
                     delay(4000L)
@@ -758,11 +773,29 @@ private fun StartScreen(
 private fun ChooseMachineScreen(
     machines: List<PosMachine>?,
     machinesError: String?,
-    onSelect: (PosMachine) -> Unit,
+    cfg: PosConfig?,
+    api: NexusApi?,
+    onSelect: (PosMachine, Int?) -> Unit,
     onBack: () -> Unit
 ) {
     val lavadora = machines?.firstOrNull { it.tipo == "lavadora" }
     val secadora = machines?.firstOrNull { it.tipo == "secadora" }
+    var lavadoraPrecoCentavos by remember { mutableStateOf<Int?>(null) }
+    var secadoraPrecoCentavos by remember { mutableStateOf<Int?>(null) }
+
+    LaunchedEffect(machines, cfg, api) {
+        if (cfg == null || cfg.condominioId.isBlank() || api == null) return@LaunchedEffect
+        lavadora?.let { maq ->
+            try {
+                lavadoraPrecoCentavos = api.fetchPrice(cfg.condominioId, maq.id, "lavadora")
+            } catch (_: Exception) { lavadoraPrecoCentavos = null }
+        } ?: run { lavadoraPrecoCentavos = null }
+        secadora?.let { maq ->
+            try {
+                secadoraPrecoCentavos = api.fetchPrice(cfg.condominioId, maq.id, "secadora")
+            } catch (_: Exception) { secadoraPrecoCentavos = null }
+        } ?: run { secadoraPrecoCentavos = null }
+    }
 
     Column(
         modifier = Modifier
@@ -774,14 +807,14 @@ private fun ChooseMachineScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(top = 8.dp),
             horizontalArrangement = Arrangement.Start
         ) {
             TextButton(onClick = onBack) {
-                Text("Voltar", style = MaterialTheme.typography.bodyMedium)
+                Text("← Voltar", style = MaterialTheme.typography.bodyLarge)
             }
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(20.dp))
         Text(
             "Escolha a máquina",
             style = MaterialTheme.typography.titleMedium,
@@ -813,78 +846,132 @@ private fun ChooseMachineScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
         Column(
             modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(224.dp)
                     .then(
-                        if (secadora != null) Modifier.clickable { onSelect(secadora) }
+                        if (secadora != null && secadoraPrecoCentavos != null) Modifier.clickable { onSelect(secadora, secadoraPrecoCentavos) }
                         else Modifier.alpha(0.5f)
                     ),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(22.dp)
                 ) {
-                    Text("♨", fontSize = 32.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "SECAR",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Tempo aproximado: 45 minutos",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text("♨", fontSize = 36.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "SECAR",
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        secadoraPrecoCentavos?.let { centavos ->
+                            Text(
+                                formatBrasilCentavos(centavos),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Tempo aproximado: 45 min",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "↑",
+                            fontSize = 112.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                        )
+                    }
                 }
             }
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(224.dp)
                     .then(
-                        if (lavadora != null) Modifier.clickable { onSelect(lavadora) }
+                        if (lavadora != null && lavadoraPrecoCentavos != null) Modifier.clickable { onSelect(lavadora, lavadoraPrecoCentavos) }
                         else Modifier.alpha(0.5f)
                     ),
                 shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
             ) {
-                Column(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally
+                        .padding(22.dp)
                 ) {
-                    Text("🫧", fontSize = 32.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "LAVAR",
-                        style = MaterialTheme.typography.headlineMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Tempo aproximado: 35 minutos",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text("🫧", fontSize = 36.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "LAVAR",
+                            style = MaterialTheme.typography.displayLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        lavadoraPrecoCentavos?.let { centavos ->
+                            Text(
+                                formatBrasilCentavos(centavos),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Tempo aproximado: 35 min",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight()
+                            .fillMaxWidth(0.1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "↓",
+                            fontSize = 112.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.9f)
+                        )
+                    }
                 }
             }
         }
@@ -899,6 +986,7 @@ private fun formatBrasilCentavos(centavos: Int): String {
 private fun ChoosePaymentScreen(
     cfg: PosConfig?,
     selectedMachine: PosMachine?,
+    initialPriceCentavos: Int?,
     authorize: (PosConfig, String, (AuthorizeResult) -> Unit, (String, String?) -> Unit) -> Unit,
     scope: kotlinx.coroutines.CoroutineScope,
     onAuthorized: (String) -> Unit,
@@ -906,7 +994,7 @@ private fun ChoosePaymentScreen(
 ) {
     var isAuthorizing by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
-    var valorCentavos by remember { mutableStateOf<Int?>(null) }
+    var valorCentavos by remember(initialPriceCentavos) { mutableStateOf<Int?>(initialPriceCentavos) }
     var priceError by remember { mutableStateOf<String?>(null) }
     /** Mantém client_request_id estável durante uma tentativa (evita novo UUID em recompose/double-tap). */
     var attemptClientRequestId by remember { mutableStateOf<String?>(null) }
@@ -916,27 +1004,44 @@ private fun ChoosePaymentScreen(
     var postAuthorizeRetryKey by remember { mutableStateOf(0) }
     val api = remember(cfg?.baseUrl) { cfg?.baseUrl?.let { NexusApi(it) } }
 
-    LaunchedEffect(cfg, selectedMachine) {
+    LaunchedEffect(initialPriceCentavos, cfg?.baseUrl, cfg?.condominioId, selectedMachine?.id, selectedMachine?.tipo) {
+        if (initialPriceCentavos != null) {
+            valorCentavos = initialPriceCentavos
+            priceError = null
+            return@LaunchedEffect
+        }
         if (cfg == null || cfg.condominioId.isBlank()) {
             valorCentavos = null
             priceError = "Configure o Condomínio (UUID) na tela Config."
             return@LaunchedEffect
         }
-        if (selectedMachine == null) {
+        val machine = selectedMachine
+        if (machine == null) {
             valorCentavos = null
             priceError = "Selecione uma máquina."
+            return@LaunchedEffect
+        }
+        val apiInstance = api
+        if (apiInstance == null) {
+            valorCentavos = null
+            priceError = "Config (baseUrl) não disponível."
             return@LaunchedEffect
         }
         priceError = null
         valorCentavos = null
         try {
-            valorCentavos = api?.fetchPrice(
-                condominioId = cfg.condominioId,
-                condominioMaquinasId = selectedMachine.id,
-                serviceType = selectedMachine.tipo
-            ) ?: throw Exception("Config não disponível")
+            valorCentavos = kotlinx.coroutines.withTimeout(20_000L) {
+                apiInstance.fetchPrice(
+                    condominioId = cfg.condominioId,
+                    condominioMaquinasId = machine.id,
+                    serviceType = machine.tipo
+                )
+            }
         } catch (e: Exception) {
-            priceError = e.message ?: "Erro ao carregar preço"
+            priceError = when {
+                e is kotlinx.coroutines.TimeoutCancellationException -> "Tempo esgotado ao carregar preço."
+                else -> e.message ?: "Erro ao carregar preço"
+            }
         }
     }
 
@@ -965,10 +1070,8 @@ private fun ChoosePaymentScreen(
                         lastSeenPagamentoStatus = pStatus
                     }
                     if (u == "LIVRE" || avail == "LIVRE") {
-                        android.util.Log.d("NEXUS_STATUS", "LIVRE detected BEFORE reset postAuthorizePid=$postAuthorizePid postAuthorizePhase=$postAuthorizePhase ident=$ident ui_state=$u availability=$avail ciclo.id=${resp.ciclo?.id ?: "-"} pagamento.id=${resp.pagamento?.id ?: "null"}")
                         postAuthorizePid = null
                         postAuthorizePhase = "none"
-                        android.util.Log.d("NEXUS_STATUS", "LIVRE AFTER reset postAuthorizePid=null postAuthorizePhase=none navigating to status")
                         onAuthorized(pid)
                         return@withTimeoutOrNull
                     }
@@ -1127,14 +1230,7 @@ private fun ChoosePaymentScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.fillMaxWidth()
             )
-        } else if (valorCentavos != null) {
-            Text(
-                formatBrasilCentavos(valorCentavos!!),
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.fillMaxWidth()
-            )
-        } else if (cfg != null && selectedMachine != null && priceError == null) {
+        } else if (cfg != null && selectedMachine != null && priceError == null && valorCentavos == null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
@@ -1149,33 +1245,39 @@ private fun ChoosePaymentScreen(
                 modifier = Modifier.fillMaxWidth()
             )
         }
-        Column(
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            contentAlignment = Alignment.Center
         ) {
-            PaymentMethodCard(
-                icon = { PixLogoIcon() },
-                label = "PIX",
-                enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
-                onClick = { doAuthorize("PIX", "PIX") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            PaymentMethodCard(
-                icon = { CardIcon() },
-                label = "CRÉDITO",
-                enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
-                onClick = { doAuthorize("CRÉDITO", "CARTAO") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            PaymentMethodCard(
-                icon = { CardIcon() },
-                label = "DÉBITO",
-                enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
-                onClick = { doAuthorize("DÉBITO", "CARTAO") },
-                modifier = Modifier.fillMaxWidth()
-            )
+            Column(
+                modifier = Modifier.fillMaxWidth(0.85f),
+                verticalArrangement = Arrangement.spacedBy(43.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                PaymentMethodCard(
+                    icon = { PixLogoIcon() },
+                    label = "PIX",
+                    enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
+                    onClick = { doAuthorize("PIX", "PIX") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                PaymentMethodCard(
+                    icon = { CardIcon() },
+                    label = "CRÉDITO",
+                    enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
+                    onClick = { doAuthorize("CRÉDITO", "CARTAO") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                PaymentMethodCard(
+                    icon = { CardIcon() },
+                    label = "DÉBITO",
+                    enabled = !isAuthorizing && postAuthorizePid == null && valorCentavos != null && priceError == null,
+                    onClick = { doAuthorize("DÉBITO", "CARTAO") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
         }
         if (isAuthorizing) {
             Row(
@@ -1196,7 +1298,7 @@ private fun PixLogoIcon() {
     Image(
         painter = painterResource(R.drawable.pix),
         contentDescription = "PIX",
-        modifier = Modifier.size(48.dp),
+        modifier = Modifier.size(72.dp),
         contentScale = ContentScale.Fit
     )
 }
@@ -1205,14 +1307,14 @@ private fun PixLogoIcon() {
 private fun CardIcon() {
     Box(
         modifier = Modifier
-            .size(48.dp)
+            .size(72.dp)
             .background(
                 MaterialTheme.colorScheme.surfaceVariant,
                 RoundedCornerShape(8.dp)
             ),
         contentAlignment = Alignment.Center
     ) {
-        Text("💳", fontSize = 24.sp)
+        Text("💳", fontSize = 40.sp)
     }
 }
 
@@ -1224,10 +1326,9 @@ private fun PaymentMethodCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val cardHeight = 80.dp
+    val cardHeight = 134.dp
     Card(
         modifier = modifier
-            .fillMaxWidth()
             .height(cardHeight)
             .clickable(enabled = enabled, onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -1236,14 +1337,14 @@ private fun PaymentMethodCard(
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 16.dp),
+                .padding(horizontal = 24.dp, vertical = 20.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalArrangement = Arrangement.spacedBy(24.dp)
         ) {
             icon()
             Text(
                 label,
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold
             )
         }
@@ -1291,11 +1392,7 @@ private fun KioskStatusScreen(
                     val resp = api.getPosStatusByIdentificadorLocal(posSerial, identificadorLocal)
                     val uState = resp.ui_state?.uppercase() ?: ""
                     val a = resp.availability?.uppercase() ?: ""
-                    val cicloId = resp.ciclo?.id ?: "-"
-                    val cicloStatus = resp.ciclo?.status?.uppercase() ?: "-"
-                    val pagId = resp.pagamento?.id ?: "null"
-                    val pagStatus = resp.pagamento?.status?.uppercase() ?: "-"
-                    Log.d("NEXUS_STATUS", "PARSED ident=$identificadorLocal ui_state=$uState availability=$a ciclo.id=$cicloId ciclo.status=$cicloStatus pagamento.id=$pagId pagamento.status=$pagStatus")
+                    Log.d("NEXUS_STATUS", "PARSED ident=$identificadorLocal ui_state=$uState availability=$a ciclo.id=${resp.ciclo?.id ?: "-"} ciclo.status=${resp.ciclo?.status ?: "-"} pagamento.id=${resp.pagamento?.id ?: "null"} pagamento.status=${resp.pagamento?.status ?: "-"}")
                     if (uState != lastUiState || a != lastAvailability) {
                         Log.d("NEXUS_STATUS", "STATE_CHANGE: ui_state $lastUiState→$uState availability $lastAvailability→$a")
                         lastUiState = uState
@@ -1318,6 +1415,13 @@ private fun KioskStatusScreen(
         if (timedOut == null) {
             onTimeout()
             onBack()
+        } else {
+            val lastState = status?.ui_state?.uppercase() ?: ""
+            val lastAvail = status?.availability?.uppercase() ?: ""
+            if (lastState == "LIVRE" || lastAvail == "LIVRE") {
+                Log.d("NEXUS_STATUS", "LIVRE reached, navigating back to start")
+                onBack()
+            }
         }
     }
 
@@ -1499,7 +1603,7 @@ private fun ConfigDialog(
             }) { Text("Salvar") }
         },
         dismissButton = { OutlinedButton(onClick = onDismiss) { Text("Cancelar") } },
-        title = { Text("Config POS") },
+        title = { Text("Config POS · ${BuildConfig.VERSION_NAME}") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
